@@ -77,6 +77,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       child: LottieStage(
                         source: _source,
                         config: _config,
+                        onConfigChanged: (config) {
+                          setState(() => _config = config);
+                        },
                       ),
                     ),
                   ],

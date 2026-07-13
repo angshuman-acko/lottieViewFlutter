@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
 
 import '../models/lottie_source.dart';
@@ -11,10 +12,12 @@ class LottieStage extends StatefulWidget {
     super.key,
     required this.source,
     required this.config,
+    required this.onConfigChanged,
   });
 
   final LottieSource? source;
   final ViewConfig config;
+  final ValueChanged<ViewConfig> onConfigChanged;
 
   @override
   State<LottieStage> createState() => _LottieStageState();
@@ -196,25 +199,10 @@ class _LottieStageState extends State<LottieStage>
             ),
           ),
           Expanded(
-            child: DecoratedBox(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF12161E),
-                    Color(0xFF0B0E13),
-                  ],
-                ),
-              ),
-              child: ClipRect(
-                child: CustomPaint(
-                  painter: const _CheckerPainter(),
-                  child: SizedBox.expand(
-                    child: Center(child: _buildLottie()),
-                  ),
-                ),
-              ),
+            child: _StageBackground(
+              mode: widget.config.backgroundMode,
+              customColor: widget.config.customBackground,
+              child: Center(child: _buildLottie()),
             ),
           ),
           if (_loadError != null)
@@ -234,9 +222,24 @@ class _LottieStageState extends State<LottieStage>
             loop: _loop,
             speed: _speed,
             progress: _controller,
+            backgroundMode: widget.config.backgroundMode,
+            customBackground: widget.config.customBackground,
             onTogglePlay: _togglePlay,
             onLoopChanged: _setLoop,
             onSpeedChanged: _setSpeed,
+            onBackgroundModeChanged: (mode) {
+              widget.onConfigChanged(
+                widget.config.copyWith(backgroundMode: mode),
+              );
+            },
+            onCustomBackgroundChanged: (color) {
+              widget.onConfigChanged(
+                widget.config.copyWith(
+                  backgroundMode: BackgroundMode.custom,
+                  customBackground: color,
+                ),
+              );
+            },
             onSeek: (value) {
               _controller.value = value;
               setState(() {});
@@ -298,16 +301,64 @@ class _SizedLottie extends StatelessWidget {
   }
 }
 
-class _PlaybackBar extends StatelessWidget {
+class _StageBackground extends StatelessWidget {
+  const _StageBackground({
+    required this.mode,
+    required this.customColor,
+    required this.child,
+  });
+
+  final BackgroundMode mode;
+  final Color customColor;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (mode) {
+      BackgroundMode.transparent => DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFF12161E),
+                Color(0xFF0B0E13),
+              ],
+            ),
+          ),
+          child: ClipRect(
+            child: CustomPaint(
+              painter: const _CheckerPainter(),
+              child: SizedBox.expand(child: child),
+            ),
+          ),
+        ),
+      BackgroundMode.white => ColoredBox(
+          color: Colors.white,
+          child: SizedBox.expand(child: child),
+        ),
+      BackgroundMode.custom => ColoredBox(
+          color: customColor,
+          child: SizedBox.expand(child: child),
+        ),
+    };
+  }
+}
+
+class _PlaybackBar extends StatefulWidget {
   const _PlaybackBar({
     required this.enabled,
     required this.isPlaying,
     required this.loop,
     required this.speed,
     required this.progress,
+    required this.backgroundMode,
+    required this.customBackground,
     required this.onTogglePlay,
     required this.onLoopChanged,
     required this.onSpeedChanged,
+    required this.onBackgroundModeChanged,
+    required this.onCustomBackgroundChanged,
     required this.onSeek,
   });
 
@@ -316,13 +367,57 @@ class _PlaybackBar extends StatelessWidget {
   final bool loop;
   final double speed;
   final Animation<double> progress;
+  final BackgroundMode backgroundMode;
+  final Color customBackground;
   final VoidCallback onTogglePlay;
   final ValueChanged<bool> onLoopChanged;
   final ValueChanged<double> onSpeedChanged;
+  final ValueChanged<BackgroundMode> onBackgroundModeChanged;
+  final ValueChanged<Color> onCustomBackgroundChanged;
   final ValueChanged<double> onSeek;
 
   @override
+  State<_PlaybackBar> createState() => _PlaybackBarState();
+}
+
+class _PlaybackBarState extends State<_PlaybackBar> {
+  late final TextEditingController _hexController;
+
+  @override
+  void initState() {
+    super.initState();
+    _hexController = TextEditingController(
+      text: colorToHex(widget.customBackground),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlaybackBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.customBackground != widget.customBackground) {
+      final next = colorToHex(widget.customBackground);
+      if (_hexController.text.toUpperCase() != next) {
+        _hexController.text = next;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _hexController.dispose();
+    super.dispose();
+  }
+
+  void _onHexChanged(String raw) {
+    final color = parseHexColor(raw);
+    if (color == null) return;
+    widget.onCustomBackgroundChanged(color);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 16, 12),
       decoration: const BoxDecoration(
@@ -332,56 +427,125 @@ class _PlaybackBar extends StatelessWidget {
       child: Column(
         children: [
           AnimatedBuilder(
-            animation: progress,
+            animation: widget.progress,
             builder: (context, _) {
               return Slider(
-                value: progress.value.clamp(0.0, 1.0),
-                onChanged: enabled ? onSeek : null,
+                value: widget.progress.value.clamp(0.0, 1.0),
+                onChanged: widget.enabled ? widget.onSeek : null,
               );
             },
           ),
-          Row(
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
             children: [
               IconButton(
-                onPressed: enabled ? onTogglePlay : null,
-                tooltip: isPlaying ? 'Pause' : 'Play',
+                onPressed: widget.enabled ? widget.onTogglePlay : null,
+                tooltip: widget.isPlaying ? 'Pause' : 'Play',
                 icon: Icon(
-                  isPlaying
+                  widget.isPlaying
                       ? Icons.pause_rounded
                       : Icons.play_arrow_rounded,
                 ),
                 color: AppColors.accent,
               ),
               IconButton(
-                onPressed: enabled ? () => onLoopChanged(!loop) : null,
-                tooltip: loop ? 'Looping on' : 'Looping off',
+                onPressed: widget.enabled
+                    ? () => widget.onLoopChanged(!widget.loop)
+                    : null,
+                tooltip: widget.loop ? 'Looping on' : 'Looping off',
                 icon: Icon(
-                  loop ? Icons.repeat_rounded : Icons.repeat_one_rounded,
+                  widget.loop
+                      ? Icons.repeat_rounded
+                      : Icons.repeat_one_rounded,
                 ),
-                color: loop ? AppColors.accent : AppColors.textMuted,
+                color: widget.loop ? AppColors.accent : AppColors.textMuted,
               ),
-              const SizedBox(width: 8),
-              Text(
-                'Speed',
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-              const SizedBox(width: 8),
+              Text('Speed', style: theme.textTheme.labelSmall),
               SizedBox(
-                width: 140,
+                width: 120,
                 child: Slider(
                   min: 0.25,
                   max: 2,
                   divisions: 7,
-                  value: speed,
-                  onChanged: enabled ? onSpeedChanged : null,
+                  value: widget.speed,
+                  onChanged: widget.enabled ? widget.onSpeedChanged : null,
                 ),
               ),
               Text(
-                '${speed.toStringAsFixed(2)}×',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
+                '${widget.speed.toStringAsFixed(2)}×',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppColors.textSecondary,
+                ),
               ),
+              const SizedBox(width: 8),
+              Text('Background', style: theme.textTheme.labelSmall),
+              SizedBox(
+                width: 148,
+                child: DropdownButtonFormField<BackgroundMode>(
+                  key: ValueKey(widget.backgroundMode),
+                  initialValue: widget.backgroundMode,
+                  isExpanded: true,
+                  dropdownColor: AppColors.surfaceRaised,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                  ),
+                  items: [
+                    for (final mode in BackgroundMode.values)
+                      DropdownMenuItem(
+                        value: mode,
+                        child: Text(mode.label),
+                      ),
+                  ],
+                  onChanged: (mode) {
+                    if (mode == null) return;
+                    widget.onBackgroundModeChanged(mode);
+                  },
+                ),
+              ),
+              if (widget.backgroundMode == BackgroundMode.custom)
+                SizedBox(
+                  width: 118,
+                  child: TextField(
+                    controller: _hexController,
+                    onChanged: _onHexChanged,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontSize: 13,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(
+                        RegExp(r'[#a-fA-F0-9]'),
+                      ),
+                      LengthLimitingTextInputFormatter(9),
+                    ],
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: '#FFFFFF',
+                      prefixIcon: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: widget.customBackground,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: const SizedBox(width: 16, height: 16),
+                        ),
+                      ),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ],
